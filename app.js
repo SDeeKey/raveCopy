@@ -4,6 +4,13 @@
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const DEMO = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
+const EPISODES = [12, 12, 12, 12, 12, 12, 12, 12, 14, 12, 12];
+const EMBED_BASE = 'https://looking-as.allarknow.online/?token_movie=6f585d090288ce71097942167f7b08&token=5af6e7af5ffb19f2ddb300d28d90f8';
+const EMBED_ORIGIN = new URL(EMBED_BASE).origin;
+const embed = $('embed');
+let embedded = { time: 0, paused: true, updated: Date.now(), duration: 0, ready: false };
+let lastEmbedSeek = 0;
+let lastEmbedCommand = 0;
 const invitation = new URLSearchParams(location.hash.slice(1));
 const roomId = invitation.get('room');
 const roomKey = invitation.get('key');
@@ -62,6 +69,10 @@ function broadcast(data) { for (const connection of connections.values()) send(c
 function updatePeople(count = connections.size + 1) { $('people').textContent = `В комнате: ${count}`; }
 
 function state() {
+  if (source?.kind === 'shameless') {
+    const elapsed = embedded.paused ? 0 : Math.min(10, (Date.now() - embedded.updated) / 1000);
+    return { type: 'state', seq: ++sequence, source, time: embedded.time + elapsed, paused: embedded.paused, rate: 1, sent: Date.now() };
+  }
   return { type: 'state', seq: ++sequence, source, time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
     paused: video.paused, rate: video.playbackRate, sent: Date.now() };
 }
@@ -77,12 +88,19 @@ function validSource(value) {
   if (value === null) return true;
   return value && typeof value.id === 'string' && value.id.length < 100 &&
     typeof value.title === 'string' && value.title.length <= 250 &&
-    ((value.kind === 'url' && typeof value.url === 'string' && value.url.length < 8000 && validUrl(value.url)) ||
+    ((value.kind === 'shameless' && Number.isInteger(value.season) && value.season >= 1 && value.season <= 11 &&
+      Number.isInteger(value.episode) && value.episode >= 1 && value.episode <= EPISODES[value.season - 1]) ||
+     (value.kind === 'url' && typeof value.url === 'string' && value.url.length < 8000 && validUrl(value.url)) ||
      (value.kind === 'file' && typeof value.name === 'string' && value.name.length <= 250 &&
        Number.isSafeInteger(value.size) && value.size > 0));
 }
 
 function loadVideo(url, descriptor) {
+  embed.hidden = true;
+  embed.removeAttribute('src');
+  $('embed-controls').hidden = true;
+  video.hidden = false;
+  $('sound').hidden = isHost || soundEnabled;
   video.pause();
   if (blobUrl && blobUrl !== url) URL.revokeObjectURL(blobUrl);
   blobUrl = url.startsWith('blob:') ? url : '';
@@ -96,7 +114,8 @@ function loadVideo(url, descriptor) {
 function setSource(descriptor, url) {
   if (!isHost) return;
   source = descriptor;
-  loadVideo(url, descriptor);
+  if (descriptor.kind === 'shameless') loadSeries(descriptor);
+  else loadVideo(url, descriptor);
   $('sync').textContent = 'Ведущий управляет плеером';
   publishState();
 }
@@ -111,6 +130,7 @@ function requestPlay() {
 }
 
 function applyPlayback(force = false) {
+  if (source?.kind === 'shameless') { applyEmbed(force); return; }
   if (!latest?.source || activeSource !== latest.source.id || video.readyState < 1) return;
   const elapsed = latest.paused ? 0 : Math.max(0, Math.min(10, (Date.now() + clockOffset - latest.sent) / 1000));
   const expected = Math.min(Number.isFinite(video.duration) ? video.duration : Infinity, latest.time + elapsed * latest.rate);
@@ -130,10 +150,17 @@ function receiveState(data) {
   if (changed) {
     source = data.source;
     $('video-title').textContent = source.title;
-    if (source.kind === 'url') {
+    if (source.kind === 'shameless') {
+      $('file').disabled = true;
+      loadSeries(source);
+    } else if (source.kind === 'url') {
       $('file').disabled = true;
       loadVideo(source.url, source);
     } else {
+      embed.hidden = true;
+      embed.removeAttribute('src');
+      video.hidden = false;
+      $('embed-controls').hidden = true;
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -265,6 +292,7 @@ function createRoom() {
   $('demo').disabled = false;
   $('file').disabled = false;
   $('load-url').disabled = false;
+  for (const id of ['season', 'episode', 'load-episode']) $(id).disabled = false;
   $('send').disabled = false;
   $('connection').textContent = 'Комната готова';
   addMessage('', 'Комната создана. Отправьте друзьям приглашение.', true);
@@ -300,6 +328,10 @@ $('file').addEventListener('change', () => {
   }
 });
 $('sound').addEventListener('click', () => {
+  if (source?.kind === 'shameless') {
+    feedback('Нажмите Play внутри внешнего плеера, чтобы разрешить воспроизведение со звуком.');
+    return;
+  }
   soundEnabled = true;
   video.muted = false;
   $('sound').hidden = true;
@@ -324,7 +356,13 @@ video.addEventListener('error', () => {
   $('sync').textContent = 'Видео не удалось открыть';
   feedback('Источник недоступен или формат не поддерживается. Для телефона лучше MP4 с H.264/AAC.');
 });
-setInterval(() => { if (isHost) publishState(); }, 2000);
+setInterval(() => {
+  if (source?.kind === 'shameless') {
+    if (!embedded.ready || !embedded.duration) embedCommand('duration');
+    else if (!isHost) applyEmbed();
+  }
+  if (isHost) publishState();
+}, 2000);
 window.addEventListener('beforeunload', () => {
   peer?.destroy();
   for (const pc of directPeers) pc.close();
@@ -485,3 +523,117 @@ $('copy-reply').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('reply').value); feedback('Код скопирован. Отправьте его ведущему.'); }
   catch { $('reply').focus(); $('reply').select(); feedback('Скопируйте код из поля.'); }
 });
+
+function fillEpisodes(season, selected = 1) {
+  $('episode').replaceChildren();
+  for (let number = 1; number <= EPISODES[season - 1]; number++) {
+    $('episode').add(new Option(String(number), String(number)));
+  }
+  $('episode').value = String(selected);
+}
+
+for (let season = 1; season <= EPISODES.length; season++) $('season').add(new Option(String(season), String(season)));
+fillEpisodes(1);
+$('season').addEventListener('change', () => fillEpisodes(Number($('season').value)));
+$('episode-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!isHost) return;
+  const season = Number($('season').value);
+  const episode = Number($('episode').value);
+  const descriptor = { id: crypto.randomUUID(), kind: 'shameless', season, episode,
+    title: `Бесстыжие · сезон ${season}, серия ${episode}` };
+  if (validSource(descriptor)) setSource(descriptor);
+});
+
+function embedCommand(api, value) {
+  if (source?.kind !== 'shameless' || embed.hidden || !embed.contentWindow) return;
+  embed.contentWindow.postMessage(JSON.stringify(value === undefined ? { api } : { api, value }), EMBED_ORIGIN);
+}
+
+function loadSeries(descriptor) {
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  video.hidden = true;
+  if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = ''; }
+  activeSource = descriptor.id;
+  embedded = { time: 0, paused: true, updated: Date.now(), duration: 0, ready: false };
+  lastEmbedSeek = 0;
+  lastEmbedCommand = 0;
+  $('empty').hidden = true;
+  $('sound').hidden = true;
+  $('video-title').textContent = descriptor.title;
+  $('season').value = String(descriptor.season);
+  fillEpisodes(descriptor.season, descriptor.episode);
+  $('episode-source').href = `https://shameless-series.ru/${descriptor.season}-sezon-${descriptor.episode}-seriya`;
+  $('embed-controls').hidden = false;
+  $('embed-resync').hidden = isHost;
+  for (const id of ['embed-play', 'embed-pause', 'embed-seek-button']) $(id).disabled = true;
+  $('sync').textContent = 'Загружаем внешний плеер…';
+  embed.hidden = false;
+  embed.src = `${EMBED_BASE}&season=${descriptor.season}&episode=${descriptor.episode}`;
+  setTimeout(() => {
+    if (activeSource === descriptor.id && !embedded.ready) {
+      $('sync').textContent = 'Плеер пока не ответил. Попробуйте Play внутри него или откройте источник.';
+    }
+  }, 15000);
+}
+
+function applyEmbed(force = false) {
+  if (isHost || !embedded.ready || !latest || activeSource !== latest.source?.id) return;
+  const elapsed = latest.paused ? 0 : Math.max(0, Math.min(10, (Date.now() + clockOffset - latest.sent) / 1000));
+  const target = Math.min(embedded.duration || 86400, latest.time + elapsed);
+  const localElapsed = embedded.paused ? 0 : Math.min(10, (Date.now() - embedded.updated) / 1000);
+  const drift = Math.abs(embedded.time + localElapsed - target);
+  if (embedded.duration > 0 && (force || drift > 1.2) && (force || Date.now() - lastEmbedSeek > 2500)) {
+    embedCommand('seek', Math.max(0.01, target));
+    lastEmbedSeek = Date.now();
+  }
+  if ((force || latest.paused !== embedded.paused) && (force || Date.now() - lastEmbedCommand > 1500)) {
+    embedCommand(latest.paused ? 'pause' : 'play');
+    lastEmbedCommand = Date.now();
+  }
+}
+
+embed.addEventListener('load', () => embedCommand('duration'));
+window.addEventListener('message', (event) => {
+  if (event.origin !== EMBED_ORIGIN || event.source !== embed.contentWindow || source?.kind !== 'shameless') return;
+  let data = event.data;
+  if (typeof data === 'string') {
+    if (data.length > 4096) return;
+    try { data = JSON.parse(data); } catch { return; }
+  }
+  if (!data || !['duration', 'play', 'pause', 'timeupdate', 'seeked', 'ended'].includes(data.event) ||
+      !Number.isFinite(data.time) || data.time < 0 || data.time > 86400) return;
+  embedded.ready = true;
+  for (const id of ['embed-play', 'embed-pause', 'embed-seek-button']) $(id).disabled = !isHost;
+  if (data.event === 'duration') {
+    embedded.duration = data.time;
+    if (!embedded.duration) $('sync').textContent = 'Каждый участник нажимает Play внутри плеера';
+    return;
+  }
+  const predicted = embedded.time + (embedded.paused ? 0 : Math.min(10, (Date.now() - embedded.updated) / 1000));
+  const jumped = Math.abs(data.time - predicted) > 1.5;
+  embedded.time = data.time;
+  embedded.updated = Date.now();
+  if (data.event === 'play') embedded.paused = false;
+  if (data.event === 'pause' || data.event === 'ended') embedded.paused = true;
+  const minutes = Math.floor(data.time / 60);
+  const seconds = String(Math.floor(data.time % 60)).padStart(2, '0');
+  $('sync').textContent = `${minutes}:${seconds} · ${embedded.paused ? 'Пауза' : 'Просмотр'} · ${isHost ? 'Вы — ведущий' : 'Следуем за ведущим'}`;
+  if (isHost && (jumped || data.event !== 'timeupdate')) publishState();
+});
+$('embed-play').addEventListener('click', () => { if (isHost) embedCommand('play'); });
+$('embed-pause').addEventListener('click', () => { if (isHost) embedCommand('pause'); });
+$('embed-seek-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!isHost || !embedded.ready) return;
+  const value = Number($('embed-seek').value);
+  if (!Number.isFinite(value) || value < 0 || value > 86400) return;
+  const target = Math.max(0.01, Math.min(embedded.duration || 86400, value));
+  embedCommand('seek', target);
+  embedded.time = target;
+  embedded.updated = Date.now();
+  publishState();
+});
+$('embed-resync').addEventListener('click', () => applyEmbed(true));
