@@ -77,3 +77,44 @@ test('reject cross-origin creation and malformed SDP', async () => {
   const { room } = await call({ action: 'create' });
   assert.equal((await call({ action: 'join', room, join, offer: 'bad' })).status, 400);
 });
+
+test('HTTPS room carries chat and player state without any SDP', async () => {
+  const { call } = setup();
+  const { room, hostKey } = await call({ action: 'create' });
+  const joined = await call({ action: 'join', room, join, relay: true });
+  assert.equal(joined.status, 200);
+  const state = { type: 'state', seq: 10, source: { id: 'film', kind: 'url', title: 'Video', url: 'https://example.com/video.mp4' },
+    time: 42, paused: false, rate: 1, sent: 1000000 };
+  await call({ action: 'sync', room, since: 0, state }, hostKey);
+  const received = await call({ action: 'sync', room, join, since: 0 });
+  assert.deepEqual(received.state, state);
+  assert.equal(received.count, 2);
+  assert.equal(received.joins, undefined);
+  const message = { id: 'one', name: 'Phone', text: 'hello' };
+  await call({ action: 'chat', room, join, message });
+  await call({ action: 'chat', room, join, message });
+  const host = await call({ action: 'sync', room, since: 0 }, hostKey);
+  assert.equal(host.messages.length, 1);
+  assert.equal(host.messages[0].text, 'hello');
+  assert.notEqual(host.messages[0].actor, join);
+  assert.equal((await call({ action: 'sync', room, join, since: host.cursor })).messages.length, 0);
+  assert.equal((await call({ action: 'sync', room, join, since: 0, state })).status, 403);
+  await call({ action: 'sync', room, since: 0, state: { ...state, seq: 9, time: 1 } }, hostKey);
+  assert.equal((await call({ action: 'sync', room, join, since: 0 })).state.time, 42);
+  assert.equal((await call({ action: 'sync', room, since: 0, state: { ...state, time: -1 } }, hostKey)).status, 400);
+  await call({ action: 'leave', room, join });
+  assert.equal((await call({ action: 'sync', room, since: 0 }, hostKey)).count, 1);
+});
+
+test('HTTPS membership survives an active watch session and stops after expiry', async () => {
+  const { call, advance } = setup();
+  const { room, hostKey } = await call({ action: 'create' });
+  await call({ action: 'join', room, join, relay: true });
+  for (let index = 0; index < 10; index++) {
+    advance(30000);
+    await call({ action: 'sync', room, since: 0 }, hostKey);
+    assert.equal((await call({ action: 'sync', room, join, since: 0 })).status, 200);
+  }
+  advance(130000);
+  assert.equal((await call({ action: 'sync', room, join, since: 0 })).status, 410);
+});
