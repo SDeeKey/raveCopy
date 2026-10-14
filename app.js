@@ -21,6 +21,9 @@ let directMode = Boolean(directOffer);
 let reconnectAttempts = 0;
 const connections = new Map();
 let peer;
+let peerOpening = false;
+let pendingCreate = false;
+let peerStartTimer;
 let hostConnection;
 let isHost = false;
 let secret = '';
@@ -280,8 +283,8 @@ function attachGuest(connection) {
 
 function createRoom() {
   if (directOffer) { joinDirect().catch(() => feedback('Не удалось открыть прямое приглашение. Попросите новую ссылку.')); return; }
+  if (!directMode && !peer?.open) { pendingCreate = !roomId; connectPeer(); return; }
   if (roomId) { joinRoom(); return; }
-  if (!directMode && !peer?.open) return;
   secret = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
   isHost = true;
   $('role').textContent = 'ВЫ — ВЕДУЩИЙ';
@@ -369,23 +372,44 @@ window.addEventListener('beforeunload', () => {
   if (blobUrl) URL.revokeObjectURL(blobUrl);
 });
 
-if (directOffer) {
-  $('direct-create').hidden = true;
-  joinDirect().catch(() => feedback('Приглашение не удалось открыть. Попросите у ведущего новую ссылку.'));
-} else if (typeof Peer === 'undefined') {
-  $('connection').textContent = 'Сервис связи недоступен';
-  feedback('Не загрузился PeerJS. Проверьте интернет или блокировщик и обновите страницу.');
-} else {
+function peerFailed() {
+  clearTimeout(peerStartTimer);
+  peerOpening = false;
+  if (directMode) return;
+  $('create').disabled = false;
+  $('connection').textContent = 'Обычная связь недоступна';
+  if (pendingCreate) {
+    pendingCreate = false;
+    createDirectRoom();
+    feedback('Сервис комнат недоступен. Создана прямая комната — отправьте другу приглашение и примите ответный код.');
+  } else if (roomId) {
+    peer?.destroy();
+    feedback('Сервис комнат недоступен. Попросите ведущего создать прямую комнату и отправить новое приглашение.');
+  }
+}
+
+function connectPeer() {
+  if (peerOpening || peer?.open) return;
+  if (typeof Peer === 'undefined') { peerFailed(); return; }
+  peerOpening = true;
+  $('create').disabled = true;
+  $('connection').textContent = 'Подключаем комнату…';
+  peer?.destroy();
   peer = new Peer(crypto.randomUUID());
+  peerStartTimer = setTimeout(peerFailed, 8000);
   peer.on('open', () => {
+    clearTimeout(peerStartTimer);
+    peerOpening = false;
     reconnectAttempts = 0;
     $('create').disabled = false;
     $('connection').textContent = isHost ? 'Комната готова' : 'Можно подключаться';
     if (roomId && roomKey && !hostConnection?.open) joinRoom();
+    else if (pendingCreate) { pendingCreate = false; createRoom(); }
   });
   peer.on('connection', acceptGuest);
   peer.on('disconnected', () => {
-    if (directMode) return;
+    if (directMode || peer.destroyed) return;
+    if (!isHost && !peerOpening) return;
     $('connection').textContent = 'Восстанавливаем сервис связи…';
     $('create').disabled = true;
     if (++reconnectAttempts <= 2 && !peer.destroyed) {
@@ -398,8 +422,19 @@ if (directOffer) {
   peer.on('error', (error) => {
     if (directMode) return;
     if (error.type === 'peer-unavailable' && roomId) { hostConnection?.close(); guestDisconnected(); }
-    else { $('connection').textContent = 'Ошибка соединения'; feedback('Не удалось связаться с сервисом. Проверьте сеть и обновите страницу.'); }
+    else if (!isHost) peerFailed();
+    else { $('connection').textContent = 'Сервис комнат недоступен'; feedback('Сервис комнат недоступен. Уже открытые соединения могут продолжать работать.'); }
   });
+}
+
+if (directOffer) {
+  $('direct-create').hidden = true;
+  joinDirect().catch(() => feedback('Приглашение не удалось открыть. Попросите у ведущего новую ссылку.'));
+} else if (roomId && roomKey) {
+  connectPeer();
+} else {
+  $('connection').textContent = 'Сайт готов';
+  $('create').disabled = false;
 }
 
 function pack(value) { return btoa(JSON.stringify(value)); }
@@ -499,16 +534,20 @@ async function joinDirect() {
   setTimeout(() => { if (pc.connectionState === 'new') { pc.close(); feedback('Приглашение истекло. Попросите у ведущего новую ссылку.'); } }, 300000);
 }
 
-$('direct-create').addEventListener('click', () => {
+function createDirectRoom() {
   if (roomId || isHost) { feedback('Для новой прямой комнаты откройте главную страницу в новой вкладке.'); return; }
   directMode = true;
+  pendingCreate = false;
+  peerOpening = false;
+  clearTimeout(peerStartTimer);
   peer?.destroy();
   $('direct-create').hidden = true;
   $('answer-panel').hidden = false;
   createRoom();
   $('connection').textContent = 'Прямая комната готова';
   $('room-hint').textContent = 'Для каждого друга создайте отдельное приглашение и примите его ответный код. Не закрывайте вкладку.';
-});
+}
+$('direct-create').addEventListener('click', createDirectRoom);
 $('accept-answer').addEventListener('click', async () => {
   try {
     const answer = unpack($('answer').value);
