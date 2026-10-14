@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#12131b">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23baadff'/%3E%3Cpath d='M12 8L24 16L12 24Z' fill='%23221d36'/%3E%3C/svg%3E">
+  <title>Вместе — совместный просмотр</title>
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <header><a class="brand" href="./"><span class="brand-icon">▶</span> вместе<span class="beta">beta</span></a><span class="tagline">Кино лучше в компании</span><span class="connection" id="connection" role="status">Подключаемся…</span></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">ВАШ МАЛЕНЬКИЙ КИНОЗАЛ</p><h1>На одной волне.<br>На одной секунде.</h1><p class="muted">Пригласите друзей. Ведущий управляет просмотром — остальные смотрят вместе.</p></div><div class="room-card"><span class="eyebrow" id="role">НОВАЯ КОМНАТА</span><h2 id="room-title">Вечер начинается здесь</h2><button id="create" disabled>Создать комнату <span>↗</span></button><button id="invite" class="secondary" hidden>Скопировать приглашение</button><label id="invite-label" hidden>Ссылка на комнату<input id="invite-link" readonly></label><p class="small muted" id="room-hint">Без регистрации. Вход по секретной ссылке.</p></div></section>
+    <section class="sources" id="direct-panel"><h3>Резервное соединение без сервера</h3><p class="small muted">Если обычная комната не подключается, создайте прямую. Отправьте другу приглашение; он вернёт ответный код. Для каждого друга нужна отдельная ссылка.</p><button id="direct-create" class="secondary">Создать прямую комнату</button><div id="answer-panel" hidden><label for="answer">Ответный код от друга</label><div class="input-row"><input id="answer" placeholder="Вставьте код ответа"><button id="accept-answer">Подключить</button></div></div><div id="reply-panel" hidden><label for="reply">Отправьте ведущему этот код</label><input id="reply" readonly><button id="copy-reply" class="secondary">Скопировать ответ</button></div></section>
+    <div class="layout">
+      <section class="watch">
+        <div class="section-heading"><h2 id="video-title">Выберите, что смотрим</h2><span class="pill" id="people">1 зритель</span></div>
+        <div class="screen"><video id="video" controls playsinline preload="metadata" aria-label="Совместный видеоплеер"></video><div class="empty" id="empty"><span class="play-art">▶</span><h3>Здесь будет ваше кино</h3><p>Создайте комнату и выберите видео ниже</p></div></div>
+        <div class="player-footer"><span id="sync" role="status">Просмотр ещё не начался</span><button id="sound" class="secondary compact" hidden>Включить просмотр и звук</button></div>
+        <section class="sources" id="sources"><h3>Источник видео</h3><form id="url-form"><label for="video-url">Прямая HTTPS-ссылка на MP4</label><div class="input-row"><input id="video-url" type="url" placeholder="https://example.com/episode.mp4" required><button type="submit" disabled id="load-url">Открыть</button></div></form><div class="source-actions"><label class="file-button">Выбрать свой файл<input id="file" type="file" accept="video/*" disabled></label><button class="secondary" id="demo" disabled>Тестовое видео</button></div><p class="small muted" id="source-note">При выборе файла каждый участник открывает у себя одинаковое видео. Файлы никуда не загружаются. Ссылка на страницу кинотеатра не подойдёт.</p></section>
+        <section class="notice"><span>ⓘ</span><div><strong>Про «Бесстыжих»</strong><p>Источник серий с русской озвучкой пока не подключён. Найденная карточка Wink сообщает, что сериал недоступен. <a href="https://wink.ru/series/besstyzhie-year-2011" target="_blank" rel="noopener noreferrer">Проверить доступность ↗</a></p></div></section>
+      </section>
+      <aside class="chat"><div class="section-heading"><h2>Рядом с вами</h2><span class="pill">Чат</span></div><label for="name">Как вас называть?</label><input id="name" maxlength="30" placeholder="Ваше имя" value="Зритель"><div id="messages" role="log" aria-label="Сообщения комнаты" aria-live="polite"><p class="chat-empty">Когда друзья присоединятся,<br>здесь появятся ваши сообщения.</p></div><form id="chat-form"><label class="sr-only" for="message">Сообщение</label><div class="input-row"><input id="message" maxlength="500" placeholder="Обсудим эту сцену…" autocomplete="off" required><button type="submit" id="send" disabled aria-label="Отправить сообщение">↑</button></div></form><p class="small muted">Сообщения передаются участникам и не сохраняются на сервере.</p></aside>
+    </div>
+    <p id="feedback" role="status" class="feedback" hidden></p>
+  </main>
+  <footer><span>вместе / маленькие вечера, большие истории</span><span>На телефоне держите вкладку открытой</span></footer>
+</body>
+</html>
