@@ -10,6 +10,22 @@ const json = (value, status = 200) => Response.json(value, {
 });
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const validSDP = value => typeof value === 'string' && value.length <= 25000 && value.startsWith('v=0\r\n');
+function validState(value) {
+  if (!value || value.type !== 'state' || !Number.isSafeInteger(value.seq) || value.seq < 0 ||
+      !Number.isFinite(value.time) || value.time < 0 || value.time > 86400 ||
+      typeof value.paused !== 'boolean' || !Number.isFinite(value.rate) || value.rate < 0.25 || value.rate > 4 ||
+      !Number.isFinite(value.sent)) return false;
+  const source = value.source;
+  if (source === null) return true;
+  if (!source || typeof source.id !== 'string' || source.id.length > 100 ||
+      typeof source.title !== 'string' || source.title.length > 250) return false;
+  if (source.kind === 'shameless') return Number.isInteger(source.season) && source.season >= 1 && source.season <= 11 &&
+    Number.isInteger(source.episode) && source.episode >= 1 && source.episode <= (source.season === 9 ? 14 : 12);
+  if (source.kind === 'file') return typeof source.name === 'string' && source.name.length <= 250 &&
+    Number.isSafeInteger(source.size) && source.size > 0;
+  if (source.kind !== 'url' || typeof source.url !== 'string' || source.url.length > 8000) return false;
+  try { const url = new URL(source.url); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; }
+}
 
 export function makeHandler(store, now = Date.now) {
   return async request => {
@@ -29,7 +45,7 @@ export function makeHandler(store, now = Date.now) {
         const room = token();
         const hostKey = randomBytes(24).toString('base64url');
         await store.setJSON(`room/${room}`, { hostHash: digest(hostKey), expires: timestamp + ROOM_TTL,
-          seen: timestamp, joins: [] }, { onlyIfNew: true });
+          seen: timestamp, joins: [], messages: [], chatSeq: 0 }, { onlyIfNew: true });
         return json({ room, hostKey });
       }
       if (!idPattern.test(input.room || '')) return json({ error: 'Invalid room' }, 400);
@@ -45,6 +61,8 @@ export function makeHandler(store, now = Date.now) {
         let result;
         let changed = joins.length !== room.joins.length;
         room.joins = joins;
+        room.messages ||= [];
+        room.chatSeq ||= 0;
         switch (input.action) {
           case 'poll':
             if (!host) fail(403, 'Нет доступа к управлению комнатой.');
@@ -53,12 +71,52 @@ export function makeHandler(store, now = Date.now) {
             break;
           case 'join':
             if (timestamp - room.seen > 90000) fail(410, 'Ведущий недоступен. Он должен открыть комнату.');
-            if (!idPattern.test(input.join || '') || !validSDP(input.offer)) fail(400, 'Некорректное приглашение.');
+            if (!idPattern.test(input.join || '') || (input.relay !== true && !validSDP(input.offer))) fail(400, 'Некорректное приглашение.');
             if (!join) {
               if (joins.length >= 7) fail(409, 'В комнате уже 8 зрителей или идут подключения.');
-              joins.push({ id: input.join, offer: input.offer, expires: timestamp + JOIN_TTL });
+              joins.push(input.relay === true
+                ? { id: input.join, relay: true, tag: token(), connected: true, seen: timestamp, expires: timestamp + JOIN_TTL }
+                : { id: input.join, offer: input.offer, expires: timestamp + JOIN_TTL });
               changed = true;
             }
+            result = { accepted: true, tag: room.joins.find(value => value.id === input.join)?.tag };
+            break;
+          case 'sync':
+            if (!host && !join?.relay) fail(410, 'Подключение истекло. Нажмите «Подключиться снова».');
+            if (!host && timestamp - room.seen > 90000) fail(410, 'Ведущий недоступен. Он должен открыть комнату.');
+            if (!Number.isSafeInteger(input.since) || input.since < 0) fail(400, 'Invalid cursor');
+            if (input.state !== undefined) {
+              if (!host) fail(403, 'Просмотром управляет ведущий.');
+              if (!validState(input.state)) fail(400, 'Invalid playback state');
+              if (!room.state || input.state.seq > room.state.seq) { room.state = input.state; changed = true; }
+            }
+            if (host && timestamp - room.seen > 20000) { room.seen = timestamp; changed = true; }
+            if (!host && timestamp - join.seen > 20000) {
+              join.seen = timestamp; join.expires = Math.min(room.expires, timestamp + JOIN_TTL); changed = true;
+            }
+            result = { state: room.state || null, messages: room.messages.filter(message => message.seq > input.since),
+              cursor: room.chatSeq, count: joins.length + 1, serverTime: timestamp };
+            break;
+          case 'chat': {
+            if (!host && !join?.relay) fail(410, 'Подключение истекло.');
+            const message = input.message;
+            if (!message || typeof message.id !== 'string' || message.id.length > 100 ||
+                typeof message.name !== 'string' || !message.name.trim() || message.name.length > 30 ||
+                typeof message.text !== 'string' || !message.text.trim() || message.text.length > 500) fail(400, 'Invalid message');
+            const actor = host ? 'host' : join.tag;
+            if (!room.messages.some(value => value.id === message.id && value.actor === actor)) {
+              const last = host ? room.lastChat : join.lastChat;
+              if (last && timestamp - last < 400) fail(429, 'Сообщения отправляются слишком часто.');
+              if (host) room.lastChat = timestamp; else join.lastChat = timestamp;
+              room.messages.push({ type: 'chat', id: message.id, actor, seq: ++room.chatSeq, name: message.name, text: message.text });
+              room.messages = room.messages.slice(-100); changed = true;
+            }
+            result = { accepted: true };
+            break;
+          }
+          case 'leave':
+            if (!join?.relay) fail(410, 'Подключение уже закрыто.');
+            room.joins = joins.filter(value => value !== join); changed = true;
             result = { accepted: true };
             break;
           case 'answer':
