@@ -21,7 +21,12 @@ let onlineRoom = '';
 let onlineHostKey = '';
 let onlineCreating = false;
 let onlinePollTimer;
-const onlinePeers = new Map();
+let relayJoin = '';
+let relayCursor = 0;
+let relayRunning = false;
+let relayBusy = false;
+let relayOffset = 0;
+let relayPendingState = null;
 const pendingDirect = new Map();
 const directPeers = new Set();
 let directMode = Boolean(directOffer || shortRoom);
@@ -74,7 +79,10 @@ function send(connection, data) {
   try { connection.send(data); } catch { feedback('Не удалось передать данные. Проверьте соединение.'); }
 }
 
-function broadcast(data) { for (const connection of connections.values()) send(connection, data); }
+function broadcast(data) {
+  if (onlineRoom && data.type === 'chat') { sendRelayChat(data); return; }
+  for (const connection of connections.values()) send(connection, data);
+}
 
 function updatePeople(count = connections.size + 1) { $('people').textContent = `В комнате: ${count}`; }
 
@@ -87,7 +95,11 @@ function state() {
     paused: video.paused, rate: video.playbackRate, sent: Date.now() };
 }
 
-function publishState() { if (isHost) broadcast(state()); }
+function publishState() {
+  if (!isHost) return;
+  if (onlineRoom) { relayPendingState = state(); scheduleRelay(100); }
+  else broadcast(state());
+}
 
 function validUrl(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; }
@@ -144,7 +156,7 @@ function applyPlayback(force = false) {
   if (!latest?.source || activeSource !== latest.source.id || video.readyState < 1) return;
   const elapsed = latest.paused ? 0 : Math.max(0, Math.min(10, (Date.now() + clockOffset - latest.sent) / 1000));
   const expected = Math.min(Number.isFinite(video.duration) ? video.duration : Infinity, latest.time + elapsed * latest.rate);
-  if (force || Math.abs(video.currentTime - expected) > 0.7) video.currentTime = expected;
+  if (force || Math.abs(video.currentTime - expected) > (latest.paused ? 0.12 : 0.7)) video.currentTime = expected;
   video.playbackRate = latest.rate;
   if (latest.paused) video.pause(); else requestPlay();
   $('sync').textContent = latest.paused ? 'Общая пауза' : 'Синхронизировано с ведущим';
@@ -385,6 +397,11 @@ setInterval(() => {
   if (isHost) publishState();
 }, 2000);
 window.addEventListener('beforeunload', () => {
+  relayRunning = false;
+  clearTimeout(onlinePollTimer);
+  if (relayJoin) fetch('/.netlify/functions/signal', { method: 'POST', keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'leave', room: shortRoom, join: relayJoin }) }).catch(() => {});
   peer?.destroy();
   for (const pc of directPeers) pc.close();
   if (blobUrl) URL.revokeObjectURL(blobUrl);
@@ -467,7 +484,7 @@ async function signal(action, data = {}, key = '') {
   });
   let result;
   try { result = await response.json(); } catch { throw new Error('Сервис комнат не запущен на этом адресе.'); }
-  if (!response.ok) throw new Error(result.error || 'Сервис комнат недоступен.');
+  if (!response.ok) throw Object.assign(new Error(result.error || 'Сервис комнат недоступен.'), { status: response.status });
   return result;
 }
 
@@ -484,82 +501,89 @@ async function createOnlineRoom() {
     directMode = true;
     createRoom();
     $('room-hint').textContent = 'Отправьте одну короткую ссылку всем друзьям. Не закрывайте эту вкладку.';
-    pollOnlineHost();
+    relayRunning = true;
+    scheduleRelay(0);
   } catch (error) {
     $('connection').textContent = 'Комната не создана';
     feedback(error.name === 'TimeoutError' ? 'Сервер не ответил. Попробуйте создать комнату снова.' : error.message);
   } finally { onlineCreating = false; $('create').disabled = false; }
 }
 
-async function pollOnlineHost() {
-  if (!isHost || !onlineRoom) return;
+function scheduleRelay(delay = 2000) {
+  if (!relayRunning) return;
+  clearTimeout(onlinePollTimer);
+  onlinePollTimer = setTimeout(syncRelay, delay);
+}
+
+async function syncRelay() {
+  if (!relayRunning || relayBusy) return;
+  relayBusy = true;
+  const started = Date.now();
+  const snapshot = isHost ? (relayPendingState || state()) : null;
+  let retryDelay = 0;
   try {
-    const result = await signal('poll', {}, onlineHostKey);
-    for (const join of result.joins || []) {
-      if (onlinePeers.has(join.id)) continue;
-      const pc = newDirectPeer();
-      onlinePeers.set(join.id, pc);
-      try {
-        pc.addEventListener('datachannel', event => {
-          const connection = directChannel(pc, event.channel, join.id);
-          acceptGuest(connection);
-          connection.on('open', () => signal('connected', { join: join.id }, onlineHostKey).catch(() => {}));
-          connection.on('close', () => {
-            onlinePeers.delete(join.id);
-            signal('release', { join: join.id }, onlineHostKey).catch(() => {});
-          });
-        }, { once: true });
-        await pc.setRemoteDescription({ type: 'offer', sdp: join.offer });
-        await pc.setLocalDescription(await pc.createAnswer());
-        await iceReady(pc);
-        await signal('answer', { join: join.id, answer: pc.localDescription.sdp }, onlineHostKey);
-        setTimeout(() => {
-          if (pc.connectionState !== 'connected') {
-            pc.close(); onlinePeers.delete(join.id);
-            signal('release', { join: join.id }, onlineHostKey).catch(() => {});
-          }
-        }, 60000);
-      } catch {
-        pc.close(); onlinePeers.delete(join.id);
-        signal('release', { join: join.id }, onlineHostKey).catch(() => {});
-      }
+    const result = await signal('sync', { join: relayJoin, since: relayCursor,
+      ...(snapshot ? { state: { ...snapshot, sent: snapshot.sent + relayOffset } } : {}) }, onlineHostKey);
+    if (!relayRunning) return;
+    relayOffset = result.serverTime - (started + Date.now()) / 2;
+    if (!isHost) { clockOffset = relayOffset; if (result.state) receiveState(result.state); }
+    else if (relayPendingState?.seq === snapshot.seq) relayPendingState = null;
+    for (const message of result.messages || []) {
+      if (message.seq > relayCursor && !(isHost && message.actor === 'host')) addMessage(message.name, message.text);
     }
-    if (connections.size) $('connection').textContent = 'Комната готова';
+    relayCursor = result.cursor;
+    updatePeople(result.count);
+    $('connection').textContent = isHost ? 'Комната готова' : 'Вы в комнате';
   } catch (error) {
-    $('connection').textContent = 'Восстанавливаем сервис комнат…';
-    if (error.message.includes('закрыта')) { feedback(error.message); return; }
-  }
-  onlinePollTimer = setTimeout(pollOnlineHost, 5000);
+    retryDelay = 5000;
+    $('connection').textContent = 'Восстанавливаем соединение…';
+    if (error.status === 410) {
+      relayRunning = false;
+      if (!isHost) hostConnection?.close();
+      feedback(error.message);
+    }
+  } finally { relayBusy = false; scheduleRelay(retryDelay || (relayPendingState ? 100 : 2000)); }
+}
+
+async function sendRelayChat(message) {
+  try {
+    await signal('chat', { join: relayJoin, message: { ...message, id: crypto.randomUUID() } }, onlineHostKey);
+    scheduleRelay(0);
+  } catch (error) { feedback(`Сообщение не отправлено: ${error.message}`); }
+}
+
+function relayConnection() {
+  const handlers = new Map();
+  const emit = (event, value) => { for (const callback of handlers.get(event) || []) callback(value); };
+  const connection = {
+    get open() { return relayRunning; },
+    on(event, callback) { if (!handlers.has(event)) handlers.set(event, []); handlers.get(event).push(callback); },
+    send(data) {
+      if (data.type === 'chat') sendRelayChat(data);
+      if (data.type === 'ping') emit('data', { type: 'pong', echo: data.sent, host: Date.now() + relayOffset });
+    },
+    close() { relayRunning = false; clearTimeout(onlinePollTimer); emit('close'); }
+  };
+  queueMicrotask(() => { if (relayRunning) emit('open'); });
+  return connection;
 }
 
 async function joinOnlineRoom() {
   if (onlineCreating || hostConnection?.open) return;
   onlineCreating = true;
-  let pc;
   try {
     if (!/^[A-Za-z0-9_-]{16}$/.test(shortRoom || '')) throw new Error('Ссылка на комнату повреждена.');
     hostConnection?.close();
     $('create').hidden = true;
     $('connection').textContent = 'Подключаемся к ведущему…';
     const id = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(12)))).replaceAll('+', '-').replaceAll('/', '_');
-    pc = newDirectPeer();
-    const connection = directChannel(pc, pc.createDataChannel('together'), id);
-    await pc.setLocalDescription(await pc.createOffer());
-    await iceReady(pc);
-    attachGuest(connection, 60000);
-    await signal('join', { join: id, offer: pc.localDescription.sdp });
-    const deadline = Date.now() + 45000;
-    while (Date.now() < deadline) {
-      const result = await signal('wait', { join: id });
-      if (result.answer) {
-        await pc.setRemoteDescription({ type: 'answer', sdp: result.answer });
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    throw new Error('Ведущий не ответил. Он должен держать комнату открытой.');
+    await signal('join', { join: id, relay: true });
+    relayJoin = id;
+    relayCursor = 0;
+    relayRunning = true;
+    attachGuest(relayConnection());
+    scheduleRelay(0);
   } catch (error) {
-    pc?.close();
     clearTimeout(connectTimer);
     $('connection').textContent = 'Не удалось подключиться';
     $('create').hidden = false;
@@ -568,6 +592,8 @@ async function joinOnlineRoom() {
     feedback(error.name === 'TimeoutError' ? 'Сервер не ответил. Нажмите «Подключиться снова».' : error.message);
   } finally { onlineCreating = false; }
 }
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleRelay(0); });
 
 function pack(value) { return btoa(JSON.stringify(value)); }
 function unpack(value) {
@@ -756,7 +782,7 @@ function applyEmbed(force = false) {
   const target = Math.min(embedded.duration || 86400, latest.time + elapsed);
   const localElapsed = embedded.paused ? 0 : Math.min(10, (Date.now() - embedded.updated) / 1000);
   const drift = Math.abs(embedded.time + localElapsed - target);
-  if (embedded.duration > 0 && (force || drift > 1.2) && (force || Date.now() - lastEmbedSeek > 2500)) {
+  if (embedded.duration > 0 && (force || drift > (latest.paused ? 0.15 : 1.2)) && (force || Date.now() - lastEmbedSeek > 2500)) {
     embedCommand('seek', Math.max(0.01, target));
     lastEmbedSeek = Date.now();
   }

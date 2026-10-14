@@ -8,7 +8,7 @@
   <title>Вместе — совместный просмотр</title>
   <link rel="stylesheet" href="./style.css?v=mobile-layout-1">
   <script async src="./peerjs-1.5.5.min.js"></script>
-  <script defer src="./app.js?v=short-rooms-1"></script>
+  <script defer src="./app.js?v=https-rooms-1"></script>
 </head>
 <body>
   <header><a class="brand" href="./"><span class="brand-icon">▶</span> вместе<span class="beta">beta</span></a><span class="tagline">Кино лучше в компании</span><span class="connection" id="connection" role="status">Подключаемся…</span></header>
@@ -25,7 +25,7 @@
         <section class="sources" id="sources"><h3>Источник видео</h3><form id="url-form"><label for="video-url">Прямая HTTPS-ссылка на MP4</label><div class="input-row"><input id="video-url" type="url" placeholder="https://example.com/episode.mp4" required><button type="submit" disabled id="load-url">Открыть</button></div></form><div class="source-actions"><label class="file-button">Выбрать свой файл<input id="file" type="file" accept="video/*" disabled></label><button class="secondary" id="demo" disabled>Тестовое видео</button></div><p class="small muted" id="source-note">При выборе файла каждый участник открывает у себя одинаковое видео. Файлы никуда не загружаются. Ссылка на страницу кинотеатра не подойдёт.</p></section>
         <section class="notice"><span>ⓘ</span><div><strong>Внешний источник</strong><p>Видео воспроизводится во встроенном плеере с указанного сайта. Его реклама, доступность и озвучки зависят от провайдера. <a id="episode-source" href="https://shameless-series.ru/1-sezon-1-seriya" target="_blank" rel="noopener noreferrer">Открыть серию на источнике ↗</a></p></div></section>
       </section>
-      <aside class="chat"><div class="section-heading"><h2>Рядом с вами</h2><span class="pill">Чат</span></div><label for="name">Как вас называть?</label><input id="name" maxlength="30" placeholder="Ваше имя" value="Зритель"><div id="messages" role="log" aria-label="Сообщения комнаты" aria-live="polite"><p class="chat-empty">Когда друзья присоединятся,<br>здесь появятся ваши сообщения.</p></div><form id="chat-form"><label class="sr-only" for="message">Сообщение</label><div class="input-row"><input id="message" maxlength="500" placeholder="Обсудим эту сцену…" autocomplete="off" required><button type="submit" id="send" disabled aria-label="Отправить сообщение">↑</button></div></form><p class="small muted">Сообщения передаются участникам и не сохраняются на сервере.</p></aside>
+      <aside class="chat"><div class="section-heading"><h2>Рядом с вами</h2><span class="pill">Чат</span></div><label for="name">Как вас называть?</label><input id="name" maxlength="30" placeholder="Ваше имя" value="Зритель"><div id="messages" role="log" aria-label="Сообщения комнаты" aria-live="polite"><p class="chat-empty">Когда друзья присоединятся,<br>здесь появятся ваши сообщения.</p></div><form id="chat-form"><label class="sr-only" for="message">Сообщение</label><div class="input-row"><input id="message" maxlength="500" placeholder="Обсудим эту сцену…" autocomplete="off" required><button type="submit" id="send" disabled aria-label="Отправить сообщение">↑</button></div></form><p class="small muted">Последние 100 сообщений хранятся до закрытия срока комнаты на сервере Netlify; очистка выполняется в течение часа после истечения срока.</p></aside>
     </div>
     <p id="feedback" role="status" class="feedback" hidden></p>
   </main>
