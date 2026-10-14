@@ -1,0 +1,12 @@
+{
+  "name": "watch-together",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/signaling.test.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "11.1.4"
+  }
+}

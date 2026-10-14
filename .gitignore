@@ -1,5 +1,6 @@
 .codegraph/
 node_modules/
+dist/
 *.mp4
 *.mkv
 *.webm

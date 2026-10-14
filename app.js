@@ -15,9 +15,16 @@ const invitation = new URLSearchParams(location.hash.slice(1));
 const roomId = invitation.get('room');
 const roomKey = invitation.get('key');
 const directOffer = invitation.get('offer');
+const shortRoom = invitation.get('r');
+const onlineEnabled = location.hostname.endsWith('.netlify.app') || location.hostname === '127.0.0.1';
+let onlineRoom = '';
+let onlineHostKey = '';
+let onlineCreating = false;
+let onlinePollTimer;
+const onlinePeers = new Map();
 const pendingDirect = new Map();
 const directPeers = new Set();
-let directMode = Boolean(directOffer);
+let directMode = Boolean(directOffer || shortRoom);
 let reconnectAttempts = 0;
 const connections = new Map();
 let peer;
@@ -229,7 +236,7 @@ function guestDisconnected() {
   $('sync').textContent = 'Ожидаем подключения';
   $('send').disabled = true;
   $('create').hidden = false;
-  $('create').disabled = !peer?.open;
+  $('create').disabled = shortRoom ? false : !peer?.open;
   $('create').textContent = 'Подключиться снова';
   updatePeople(1);
 }
@@ -246,7 +253,7 @@ function joinRoom() {
   attachGuest(connection);
 }
 
-function attachGuest(connection) {
+function attachGuest(connection, timeout = 15000) {
   hostConnection = connection;
   connection.on('open', () => {
     if (connection !== hostConnection) return;
@@ -278,10 +285,12 @@ function attachGuest(connection) {
   connection.on('error', () => { if (connection === hostConnection) { connection.close(); guestDisconnected(); } });
   connectTimer = setTimeout(() => {
     if (!connection.open) { connection.close(); guestDisconnected(); feedback('Ведущий недоступен. Он должен держать страницу открытой. Некоторые сети блокируют прямую связь.'); }
-  }, 15000);
+  }, timeout);
 }
 
 function createRoom() {
+  if (shortRoom) { joinOnlineRoom(); return; }
+  if (onlineEnabled && !directMode && !roomId) { createOnlineRoom(); return; }
   if (directOffer) { joinDirect().catch(() => feedback('Не удалось открыть прямое приглашение. Попросите новую ссылку.')); return; }
   if (!directMode && !peer?.open) { pendingCreate = !roomId; connectPeer(); return; }
   if (roomId) { joinRoom(); return; }
@@ -303,6 +312,15 @@ function createRoom() {
 
 $('create').addEventListener('click', createRoom);
 $('invite').addEventListener('click', async () => {
+  if (onlineRoom) {
+    const url = new URL(location.pathname, location.origin);
+    url.hash = `r=${onlineRoom}`;
+    $('invite-label').hidden = false;
+    $('invite-link').value = url.href;
+    try { await navigator.clipboard.writeText(url.href); feedback('Ссылка скопирована. Друг откроет её и подключится автоматически.'); }
+    catch { $('invite-link').focus(); $('invite-link').select(); feedback('Скопируйте ссылку из поля.'); }
+    return;
+  }
   if (directMode) { await inviteDirect(); return; }
   const url = new URL(location.href);
   if (isHost) url.hash = new URLSearchParams({ room: peer.id, key: secret }).toString();
@@ -427,7 +445,11 @@ function connectPeer() {
   });
 }
 
-if (directOffer) {
+if (onlineEnabled || shortRoom) $('direct-panel').hidden = true;
+if (shortRoom) {
+  $('create').hidden = true;
+  joinOnlineRoom();
+} else if (directOffer) {
   $('direct-create').hidden = true;
   joinDirect().catch(() => feedback('Приглашение не удалось открыть. Попросите у ведущего новую ссылку.'));
 } else if (roomId && roomKey) {
@@ -435,6 +457,116 @@ if (directOffer) {
 } else {
   $('connection').textContent = 'Сайт готов';
   $('create').disabled = false;
+}
+
+async function signal(action, data = {}, key = '') {
+  const response = await fetch('/.netlify/functions/signal', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: key } : {}) },
+    body: JSON.stringify({ action, room: onlineRoom || shortRoom, ...data }),
+    cache: 'no-store', signal: AbortSignal.timeout(10000)
+  });
+  let result;
+  try { result = await response.json(); } catch { throw new Error('Сервис комнат не запущен на этом адресе.'); }
+  if (!response.ok) throw new Error(result.error || 'Сервис комнат недоступен.');
+  return result;
+}
+
+async function createOnlineRoom() {
+  if (onlineCreating || isHost) return;
+  onlineCreating = true;
+  $('create').disabled = true;
+  $('connection').textContent = 'Создаём комнату…';
+  try {
+    const result = await signal('create');
+    if (!/^[A-Za-z0-9_-]{16}$/.test(result.room) || typeof result.hostKey !== 'string') throw new Error('Некорректный ответ сервера.');
+    onlineRoom = result.room;
+    onlineHostKey = result.hostKey;
+    directMode = true;
+    createRoom();
+    $('room-hint').textContent = 'Отправьте одну короткую ссылку всем друзьям. Не закрывайте эту вкладку.';
+    pollOnlineHost();
+  } catch (error) {
+    $('connection').textContent = 'Комната не создана';
+    feedback(error.name === 'TimeoutError' ? 'Сервер не ответил. Попробуйте создать комнату снова.' : error.message);
+  } finally { onlineCreating = false; $('create').disabled = false; }
+}
+
+async function pollOnlineHost() {
+  if (!isHost || !onlineRoom) return;
+  try {
+    const result = await signal('poll', {}, onlineHostKey);
+    for (const join of result.joins || []) {
+      if (onlinePeers.has(join.id)) continue;
+      const pc = newDirectPeer();
+      onlinePeers.set(join.id, pc);
+      try {
+        pc.addEventListener('datachannel', event => {
+          const connection = directChannel(pc, event.channel, join.id);
+          acceptGuest(connection);
+          connection.on('open', () => signal('connected', { join: join.id }, onlineHostKey).catch(() => {}));
+          connection.on('close', () => {
+            onlinePeers.delete(join.id);
+            signal('release', { join: join.id }, onlineHostKey).catch(() => {});
+          });
+        }, { once: true });
+        await pc.setRemoteDescription({ type: 'offer', sdp: join.offer });
+        await pc.setLocalDescription(await pc.createAnswer());
+        await iceReady(pc);
+        await signal('answer', { join: join.id, answer: pc.localDescription.sdp }, onlineHostKey);
+        setTimeout(() => {
+          if (pc.connectionState !== 'connected') {
+            pc.close(); onlinePeers.delete(join.id);
+            signal('release', { join: join.id }, onlineHostKey).catch(() => {});
+          }
+        }, 60000);
+      } catch {
+        pc.close(); onlinePeers.delete(join.id);
+        signal('release', { join: join.id }, onlineHostKey).catch(() => {});
+      }
+    }
+    if (connections.size) $('connection').textContent = 'Комната готова';
+  } catch (error) {
+    $('connection').textContent = 'Восстанавливаем сервис комнат…';
+    if (error.message.includes('закрыта')) { feedback(error.message); return; }
+  }
+  onlinePollTimer = setTimeout(pollOnlineHost, 5000);
+}
+
+async function joinOnlineRoom() {
+  if (onlineCreating || hostConnection?.open) return;
+  onlineCreating = true;
+  let pc;
+  try {
+    if (!/^[A-Za-z0-9_-]{16}$/.test(shortRoom || '')) throw new Error('Ссылка на комнату повреждена.');
+    hostConnection?.close();
+    $('create').hidden = true;
+    $('connection').textContent = 'Подключаемся к ведущему…';
+    const id = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(12)))).replaceAll('+', '-').replaceAll('/', '_');
+    pc = newDirectPeer();
+    const connection = directChannel(pc, pc.createDataChannel('together'), id);
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceReady(pc);
+    attachGuest(connection, 60000);
+    await signal('join', { join: id, offer: pc.localDescription.sdp });
+    const deadline = Date.now() + 45000;
+    while (Date.now() < deadline) {
+      const result = await signal('wait', { join: id });
+      if (result.answer) {
+        await pc.setRemoteDescription({ type: 'answer', sdp: result.answer });
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    throw new Error('Ведущий не ответил. Он должен держать комнату открытой.');
+  } catch (error) {
+    pc?.close();
+    clearTimeout(connectTimer);
+    $('connection').textContent = 'Не удалось подключиться';
+    $('create').hidden = false;
+    $('create').disabled = false;
+    $('create').textContent = 'Подключиться снова';
+    feedback(error.name === 'TimeoutError' ? 'Сервер не ответил. Нажмите «Подключиться снова».' : error.message);
+  } finally { onlineCreating = false; }
 }
 
 function pack(value) { return btoa(JSON.stringify(value)); }
