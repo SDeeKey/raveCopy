@@ -62,7 +62,8 @@ function feedback(message) {
 function addMessage(name, text, system = false) {
   if (system) return;
   const element = document.createElement('div');
-  element.className = system ? 'system' : 'bubble';
+  element.className = 'bubble';
+  element.dataset.initial = Array.from(name.trim())[0]?.toUpperCase() || '•';
   if (!system) {
     const author = document.createElement('strong');
     author.textContent = name;
@@ -273,7 +274,7 @@ function attachGuest(connection, timeout = 15000) {
     clearTimeout(connectTimer);
     $('connection').textContent = 'Вы в комнате';
     $('role').textContent = 'ВЫ — ЗРИТЕЛЬ';
-    $('room-title').textContent = 'Вечер в хорошей компании';
+    $('room-title').textContent = 'Вы в гостях';
     $('room-hint').textContent = 'Ведущий выбирает видео и управляет просмотром.';
     $('create').hidden = true;
     $('invite').hidden = directMode;
@@ -310,7 +311,7 @@ function createRoom() {
   secret = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
   isHost = true;
   $('role').textContent = 'ВЫ — ВЕДУЩИЙ';
-  $('room-title').textContent = 'Можно звать друзей';
+  $('room-title').textContent = 'Ваша комната';
   $('room-hint').textContent = 'До 8 зрителей. Не закрывайте эту вкладку: комната работает, пока вы здесь.';
   $('create').hidden = true;
   $('invite').hidden = false;
