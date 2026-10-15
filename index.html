@@ -6,12 +6,13 @@
   <meta name="theme-color" content="#12131b">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23baadff'/%3E%3Cpath d='M12 8L24 16L12 24Z' fill='%23221d36'/%3E%3C/svg%3E">
   <title>Вместе — совместный просмотр</title>
-  <link rel="stylesheet" href="./style.css?v=mobile-layout-1">
+  <link rel="stylesheet" href="./style.css?v=mobile-stable-1">
   <script async src="./peerjs-1.5.5.min.js"></script>
-  <script defer src="./app.js?v=https-rooms-1"></script>
+  <script defer src="./app.js?v=mobile-stable-1"></script>
 </head>
 <body>
   <header><a class="brand" href="./"><span class="brand-icon">▶</span> вместе<span class="beta">beta</span></a><span class="tagline">Кино лучше в компании</span><span class="connection" id="connection" role="status">Подключаемся…</span></header>
+  <button id="mobile-settings" class="mobile-settings secondary" type="button" aria-expanded="false" aria-controls="room-title episode-form sources">Настройки</button>
   <main>
     <section class="intro"><div><p class="eyebrow">ВАШ МАЛЕНЬКИЙ КИНОЗАЛ</p><h1>На одной волне.<br>На одной секунде.</h1><p class="muted">Пригласите друзей. Ведущий управляет просмотром — остальные смотрят вместе.</p></div><div class="room-card"><span class="eyebrow" id="role">НОВАЯ КОМНАТА</span><h2 id="room-title">Вечер начинается здесь</h2><button id="create" disabled>Создать комнату <span>↗</span></button><button id="invite" class="secondary" hidden>Скопировать приглашение</button><label id="invite-label" hidden>Ссылка на комнату<input id="invite-link" readonly></label><p class="small muted" id="room-hint">Без регистрации. Вход по секретной ссылке.</p></div></section>
     <section class="sources" id="direct-panel"><h3>Резервное соединение без сервера</h3><p class="small muted">Если обычная комната не подключается, создайте прямую. Отправьте другу приглашение; он вернёт ответный код. Для каждого друга нужна отдельная ссылка.</p><button id="direct-create" class="secondary">Создать прямую комнату</button><div id="answer-panel" hidden><label for="answer">Ответный код от друга</label><div class="input-row"><input id="answer" placeholder="Вставьте код ответа"><button id="accept-answer">Подключить</button></div></div><div id="reply-panel" hidden><label for="reply">Отправьте ведущему этот код</label><input id="reply" readonly><button id="copy-reply" class="secondary">Скопировать ответ</button></div></section>

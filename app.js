@@ -140,6 +140,7 @@ function setSource(descriptor, url) {
   else loadVideo(url, descriptor);
   $('sync').textContent = 'Ведущий управляет плеером';
   publishState();
+  setMobileSettings(false);
 }
 
 function requestPlay() {
@@ -834,3 +835,44 @@ $('embed-seek-form').addEventListener('submit', (event) => {
   publishState();
 });
 $('embed-resync').addEventListener('click', () => applyEmbed(true));
+
+// Follow the visible area above the keyboard without resizing the player.
+function setMobileSettings(open) {
+  document.body.classList.toggle('mobile-settings-open', open);
+  $('mobile-settings').setAttribute('aria-expanded', String(open));
+  $('mobile-settings').textContent = open ? 'К просмотру' : 'Настройки';
+}
+
+$('mobile-settings').addEventListener('click', () => {
+  setMobileSettings(!document.body.classList.contains('mobile-settings-open'));
+});
+setMobileSettings(!shortRoom && !roomId && !directOffer);
+
+let mobileViewportFrame = 0;
+let mobileViewportWidth = 0;
+function updateMobileViewport() {
+  cancelAnimationFrame(mobileViewportFrame);
+  mobileViewportFrame = requestAnimationFrame(() => {
+    if (!matchMedia('(max-width: 680px)').matches) return;
+    const viewport = window.visualViewport;
+    // Leave user-initiated pinch zoom available.
+    if (viewport && Math.abs(viewport.scale - 1) > 0.05) return;
+    const height = viewport?.height || window.innerHeight;
+    const width = document.documentElement.clientWidth;
+    const typing = document.activeElement?.id === 'message';
+    const style = document.documentElement.style;
+    style.setProperty('--mobile-height', `${height}px`);
+    style.setProperty('--mobile-top', `${viewport?.offsetTop || 0}px`);
+    if (!typing || width !== mobileViewportWidth) {
+      style.setProperty('--mobile-player-height', `${Math.min((width - 24) * 9 / 16, height * 0.3)}px`);
+      mobileViewportWidth = width;
+    }
+    document.body.classList.toggle('mobile-typing', typing);
+  });
+}
+window.visualViewport?.addEventListener('resize', updateMobileViewport);
+window.visualViewport?.addEventListener('scroll', updateMobileViewport);
+window.addEventListener('resize', updateMobileViewport);
+document.addEventListener('focusin', updateMobileViewport);
+document.addEventListener('focusout', updateMobileViewport);
+updateMobileViewport();
