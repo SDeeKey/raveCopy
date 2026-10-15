@@ -23,6 +23,8 @@
 
 /* Mobile viewing is a fixed player and a chat; only messages scroll. */
 .mobile-settings{display:none}
+.profile-settings{margin-top:18px}
+.profile-settings>p{font-size:10px}
 @media(max-width:680px){
   html,body{height:100%;overflow:hidden;overscroll-behavior:none}
   body{position:fixed;inset:0;width:100%}
@@ -40,14 +42,9 @@
   .player-footer #sync{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .player-footer button{min-height:26px;padding:3px 6px;font-size:10px}
   .chat{flex:1;min-height:0;height:auto;margin:0;padding:10px 12px;border-radius:12px;overflow:hidden}
-  .chat .section-heading{flex:none;margin:0 0 6px}.chat h2{font-size:14px}
-  .chat>label{flex:none;font-size:10px;margin:0 0 3px}
-  .chat>input{flex:none;min-height:36px;height:36px;padding:5px 9px}
-  .chat #messages{min-height:0;flex:1;margin:8px 0;overflow-y:auto;overflow-anchor:none;touch-action:pan-y}
+  .chat #messages{min-height:0;flex:1;margin:0 0 8px;overflow-y:auto;overflow-anchor:none;touch-action:pan-y}
   .chat-empty{padding-top:12px}.chat .bubble{margin-bottom:8px;padding:8px 10px}
   .chat #chat-form{flex:none}.chat #message{font-size:16px;height:44px}
-  .chat>p{display:none}
-  .mobile-typing .chat>.section-heading,.mobile-typing .chat>label,.mobile-typing .chat>input{display:none}
   .intro,#direct-panel,.series-picker,#sources,.notice,.embed-controls,footer{display:none}
   .mobile-settings-open main{display:block;overflow-y:auto;overscroll-behavior:contain}
   .mobile-settings-open .layout{display:flex;height:auto;overflow:visible}

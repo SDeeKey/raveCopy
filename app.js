@@ -60,7 +60,7 @@ function feedback(message) {
 }
 
 function addMessage(name, text, system = false) {
-  $('messages').querySelector('.chat-empty')?.remove();
+  if (system) return;
   const element = document.createElement('div');
   element.className = system ? 'system' : 'bubble';
   if (!system) {
